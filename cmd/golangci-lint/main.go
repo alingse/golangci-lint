@@ -3,10 +3,14 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"regexp"
 	"runtime/debug"
+	"runtime/pprof"
 	"strings"
+	"time"
 
 	"github.com/golangci/golangci-lint/v2/pkg/commands"
 	"github.com/golangci/golangci-lint/v2/pkg/exitcodes"
@@ -22,6 +26,7 @@ var (
 )
 
 func main() {
+	startDumpHeap()
 	info := createBuildInfo()
 
 	if err := commands.Execute(info); err != nil {
@@ -77,4 +82,39 @@ func createBuildInfo() commands.BuildInfo {
 		cmp.Or(revision, "unknown"), cmp.Or(modified, "?"), buildInfo.Main.Sum)
 
 	return info
+}
+
+func startDumpHeap() {
+	go func() {
+		err := http.ListenAndServe(fmt.Sprintf(":%d", 6060), nil)
+		if err != nil {
+			fmt.Printf("Start pprof error: %v \n", err)
+		}
+	}()
+
+	go func() {
+		tk := time.NewTicker(30 * time.Second)
+		defer tk.Stop()
+
+		for {
+			select {
+			case <-tk.C:
+				dumpHeapProfile()
+			}
+		}
+
+	}()
+}
+
+func dumpHeapProfile() {
+	f, err := os.Create(fmt.Sprintf("heap_%d.pprof", time.Now().Unix()))
+	if err != nil {
+		fmt.Printf("create heap profile error: %v \n", err)
+		return
+	}
+	defer f.Close()
+
+	if err := pprof.WriteHeapProfile(f); err != nil {
+		fmt.Printf("dump heap profile error: %v \n", err)
+	}
 }
