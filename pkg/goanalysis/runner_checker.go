@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"go/types"
+	"os"
 	"reflect"
+	"sync"
 	"time"
 
 	"golang.org/x/tools/go/analysis"
@@ -68,6 +70,8 @@ func (act *action) String() string {
 	return fmt.Sprintf("%s@%s", act.Analyzer, act.Package)
 }
 
+var fileLock sync.Mutex
+
 // NOTE(ldez) altered version of `func (act *action) execOnce()`.
 func (act *action) analyze() {
 	defer close(act.analysisDoneCh) // unblock actions depending on this action
@@ -91,10 +95,27 @@ func (act *action) analyze() {
 	var depErrors error
 	for _, dep := range act.Deps {
 		if dep.Err != nil {
+			fileLock.Lock()
+			f, err := os.Open("err.detail.json")
+			if err == nil {
+				f.WriteString(fmt.Sprintf("\n----\nact sub %+v for %s run %s got dep %+v err %+v \n\n", act, act.Package.Name, act.Analyzer.Name, dep, dep.Err))
+				f.Close()
+			}
+			fileLock.Unlock()
 			depErrors = errors.Join(depErrors, errors.Unwrap(dep.Err))
 		}
 	}
 	if depErrors != nil {
+		fileLock.Lock()
+		//f, err := os.Open("err.detail.json")
+		f, err := os.OpenFile("err.detail.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			f.WriteString(fmt.Sprintf("\n----\nact %+v for %s run %s got err %+v \n\n", act, act.Package.Name, act.Analyzer.Name, depErrors))
+			f.Close()
+		} else {
+			panic(err)
+		}
+		fileLock.Unlock()
 		act.Err = fmt.Errorf("failed prerequisites: %w", depErrors)
 		return
 	}
