@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"go/types"
+	"os"
 	"reflect"
+	"sync"
 	"time"
 
 	"golang.org/x/tools/go/analysis"
@@ -68,6 +70,17 @@ func (act *action) String() string {
 	return fmt.Sprintf("%s@%s", act.Analyzer, act.Package)
 }
 
+var fileLock sync.Mutex
+
+func writeErrLog(s string) {
+	f, err := os.OpenFile("err.detail.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		panic(err)
+	}
+	f.WriteString(s)
+	f.Close()
+}
+
 // NOTE(ldez) altered version of `func (act *action) execOnce()`.
 func (act *action) analyze() {
 	defer close(act.analysisDoneCh) // unblock actions depending on this action
@@ -89,11 +102,33 @@ func (act *action) analyze() {
 
 	// Report an error if any dependency failures.
 	var depErrors error
+	var someDepErr bool
 	for _, dep := range act.Deps {
 		if dep.Err != nil {
+			someDepErr = true
+			// dep is a action
+			if dep.Err != nil && errors.Unwrap(dep.Err) == nil {
+				fileLock.Lock()
+				writeErrLog(fmt.Sprintf("act Package.Name %s\n", act.Package.Name))
+				writeErrLog(fmt.Sprintf("act Analyzer.Name %s\n", act.Analyzer.Name))
+				writeErrLog(fmt.Sprintf("act depErrors %#v\n", depErrors))
+				writeErrLog(fmt.Sprintf("act dep.Err %#v\n", dep.Err))
+				writeErrLog(fmt.Sprintf("act errors.Unwrap(dep.Err) %#v\n", errors.Unwrap(dep.Err)))
+				fileLock.Unlock()
+			}
 			depErrors = errors.Join(depErrors, errors.Unwrap(dep.Err))
 		}
 	}
+
+	if someDepErr && depErrors == nil {
+		fileLock.Lock()
+		writeErrLog(fmt.Sprintf("act Package.Name %s\n", act.Package.Name))
+		writeErrLog(fmt.Sprintf("act Analyzer.Name %s\n", act.Analyzer.Name))
+		writeErrLog(fmt.Sprintf("act depErrors %#v\n", depErrors))
+		writeErrLog(fmt.Sprintf("act someDepErr %#v\n", someDepErr))
+		fileLock.Unlock()
+	}
+
 	if depErrors != nil {
 		act.Err = errors.Join(depErrors, errors.New("failed prerequisites"))
 		return
